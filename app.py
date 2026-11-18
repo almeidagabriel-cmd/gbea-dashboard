@@ -306,7 +306,6 @@ def ler_pdf(conteudo: bytes) -> pd.DataFrame:
         else:
             descricao = resto
 
-        # Limpeza e mapeamento inteligente baseado nas palavras-chave do Sicredi
         desc_upper = descricao.upper()
         categoria_atribuida = "Outros"
 
@@ -331,7 +330,6 @@ def ler_pdf(conteudo: bytes) -> pd.DataFrame:
         elif "SAQUE" in desc_upper:
             categoria_atribuida = "Transf saida"
         else:
-            # Pega apenas a primeira parte do texto para evitar poluição na categoria
             categoria_atribuida = descricao.split()[0] if descricao else "Outros"
 
         parsed_rows.append({
@@ -1015,12 +1013,27 @@ def main():
     # ── Aba 5: conciliação ───────────────────────────────────────────────
     with abas[4]:
         sc = periodo[periodo.bloco == "SEM_CLASSIF"]
-        st.markdown("**Categorias fora do DE-PARA**")
+        st.markdown("**Categorias fora do DE-PARA (ordenadas por data)**")
         if sc.empty:
             st.success("Todas as categorias do período foram reconhecidas pelo DE-PARA ✔")
         else:
-            st.caption("Escolha a conta gerencial e clique em aplicar. A regra vale para esta sessão; "
-                       "para torná-la permanente, inclua o termo na lista `REGRAS` do código.")
+            st.caption("Abaixo estão os lançamentos sem classificação ordenados cronologicamente por data. "
+                       "Você pode consultar a data e o histórico ou aplicar uma regra em lote abaixo.")
+            
+            detalhe_sc = sc[["data", "unidade", "categoria", "descricao", "valor"]].sort_values("data")
+            st.dataframe(
+                detalhe_sc, 
+                hide_index=True, 
+                width="stretch",
+                column_config={
+                    "data": st.column_config.DateColumn("Data", format="DD/MM/YYYY"),
+                    "valor": st.column_config.NumberColumn("Valor", format="R$ %.2f"),
+                    "descricao": "Histórico do Lançamento"
+                }
+            )
+
+            st.markdown("---")
+            st.markdown("**Aplicar regra de classificação em lote por categoria:**")
             resumo = sc.groupby("categoria").agg(lancamentos=("valor", "size"), total=("valor", "sum")).reset_index()
             resumo["Classificar como"] = None
             with st.form("form_map"):
@@ -1033,6 +1046,7 @@ def main():
                         st.session_state["extra_map"][norm(r["categoria"])] = r["Classificar como"]
                     st.cache_data.clear()
                     st.rerun()
+
         if st.session_state["extra_map"]:
             with st.expander("Classificações manuais desta sessão"):
                 st.json(st.session_state["extra_map"])
@@ -1041,6 +1055,7 @@ def main():
                     st.cache_data.clear()
                     st.rerun()
 
+        st.markdown("---")
         st.markdown("**Pendências de conciliação** (Despesa não identificada)")
         pend = periodo[periodo.bloco == "PENDENCIA"]
         if pend.empty:
