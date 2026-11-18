@@ -587,12 +587,10 @@ def indicadores(df: pd.DataFrame) -> dict:
 CSS = """
 <style>
 .block-container {padding-top: 3.2rem; max-width: 1500px;}
-.gbea-brand {display:flex; align-items:center; gap:.6rem; margin-bottom:.2rem}
-.gbea-brand .dia {width:26px; height:26px; transform:rotate(45deg); display:grid;
-  grid-template-columns:1fr 1fr; gap:2px; border-radius:4px; overflow:hidden}
-.gbea-brand .dia span:nth-child(1){background:#2a78d6}.gbea-brand .dia span:nth-child(2){background:#eb6834}
-.gbea-brand .dia span:nth-child(3){background:#1baf7a}.gbea-brand .dia span:nth-child(4){background:#eda100}
-.gbea-brand h1 {font-size:1.55rem; margin:0; padding:0}
+.gbea-brand {display:flex; align-items:center; gap:0.8rem; margin-bottom:0.4rem} /* Ajustado o gap e margem */
+.gbea-brand .dia {width:28px; height:28px; transform:rotate(45deg); display:grid;
+  grid-template-columns:1fr 1fr; gap:2px; border-radius:4px; overflow:hidden; flex-shrink:0;} /* Evita deformação do ícone */
+.gbea-brand h1 {font-size:1.55rem; margin:0; padding:0; line-height:1.2;}
 .gbea-sub {opacity:.65; font-size:.9rem; margin-bottom:1rem}
 .kpi {border:1px solid rgba(128,128,128,.22); border-radius:10px; padding:.65rem .75rem; height:100%; display:flex; flex-direction:column; justify-content:space-between; box-sizing:border-box; overflow:hidden;}
 .kpi .l {font-size:.68rem; opacity:.75; text-transform:uppercase; letter-spacing:.02em; line-height:1.15; min-height:2.4em;}
