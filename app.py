@@ -250,24 +250,51 @@ def _ler_bruto(nome: str, conteudo: bytes) -> pd.DataFrame:
 
 
 def ler_pdf(conteudo: bytes) -> pd.DataFrame:
-    """Extrai texto estruturado de arquivos PDF e converte em DataFrame."""
+    """Extrai transações de extratos bancários em PDF linha por linha com base em datas."""
     reader = PdfReader(io.BytesIO(conteudo))
-    texto_linhas = []
+    linhas_extraidas = []
+    
+    # Regex para capturar datas no formato YYYY-MM-DD
+    padrao_data = re.compile(r"^\d{4}-\d{2}-\d{2}")
+    
     for pagina in reader.pages:
         txt = pagina.extract_text()
-        if txt:
-            for linha in txt.split("\n"):
-                partes = re.split(r'\s{2,}|\t', linha.strip())
-                if len(partes) > 1:
-                    texto_linhas.append(partes)
-    
-    if not texto_linhas:
+        if not txt:
+            continue
+            
+        buffer_linha = ""
+        for linha in txt.split("\n"):
+            linha = linha.strip()
+            if not linha:
+                continue
+            
+            # Se a linha começa com uma data, é um novo lançamento
+            if padrao_data.match(linha):
+                if buffer_linha:
+                    linhas_extraidas.append(buffer_linha)
+                buffer_linha = linha
+            else:
+                # Acumula o texto da linha anterior (descrições ou valores quebrados)
+                buffer_linha += " | " + linha
+                
+        if buffer_linha:
+            linhas_extraidas.append(buffer_linha)
+            
+    if not linhas_extraidas:
         raise ValueError("Não foi possível extrair dados estruturados deste PDF.")
+        
+    # Converte as linhas brutas em colunas divididas por " | "
+    dados_tabela = [item.split(" | ") for item in linhas_extraidas]
     
-    df = pd.DataFrame(texto_linhas)
-    df.columns = [f"col_{i}" for i in range(df.shape[1])]
+    # Padroniza para um DataFrame com colunas genéricas reconhecíveis
+    df = pd.DataFrame(dados_tabela)
+    colunas_nome = ["data", "descricao", "documento", "credito", "debito", "saldo", "fornecedor", "categoria"]
+    
+    # Ajusta as colunas dinamicamente de acordo com o que foi extraído
+    df = df.iloc[:, :len(colunas_nome)]
+    df.columns = colunas_nome[:df.shape[1]]
+    
     return df
-
 
 @st.cache_data(show_spinner=False)
 def ler_arquivo(nome: str, conteudo: bytes) -> pd.DataFrame:
