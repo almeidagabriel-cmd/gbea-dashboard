@@ -1,2 +1,2 @@
 # gbea-dashboard
-Relatorio dos fluxo de caixa
+Relatorio de fluxo de caixa
