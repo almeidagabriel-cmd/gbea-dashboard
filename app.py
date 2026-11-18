@@ -250,11 +250,9 @@ def _ler_bruto(nome: str, conteudo: bytes) -> pd.DataFrame:
 
 
 def ler_pdf(conteudo: bytes) -> pd.DataFrame:
-    """Extrai transações de extratos bancários em PDF linha por linha com base em datas."""
+    """Extrai e mapeia linhas de extratos em PDF do Sicredi para o formato padrão."""
     reader = PdfReader(io.BytesIO(conteudo))
     linhas_extraidas = []
-    
-    # Regex para capturar datas no formato YYYY-MM-DD
     padrao_data = re.compile(r"^\d{4}-\d{2}-\d{2}")
     
     for pagina in reader.pages:
@@ -268,13 +266,11 @@ def ler_pdf(conteudo: bytes) -> pd.DataFrame:
             if not linha:
                 continue
             
-            # Se a linha começa com uma data, é um novo lançamento
             if padrao_data.match(linha):
                 if buffer_linha:
                     linhas_extraidas.append(buffer_linha)
                 buffer_linha = linha
             else:
-                # Acumula o texto da linha anterior (descrições ou valores quebrados)
                 buffer_linha += " | " + linha
                 
         if buffer_linha:
@@ -283,19 +279,36 @@ def ler_pdf(conteudo: bytes) -> pd.DataFrame:
     if not linhas_extraidas:
         raise ValueError("Não foi possível extrair dados estruturados deste PDF.")
         
-    # Converte as linhas brutas em colunas divididas por " | "
     dados_tabela = [item.split(" | ") for item in linhas_extraidas]
-    
-    # Padroniza para um DataFrame com colunas genéricas reconhecíveis
     df = pd.DataFrame(dados_tabela)
-    colunas_nome = ["data", "descricao", "documento", "credito", "debito", "saldo", "fornecedor", "categoria"]
     
-    # Ajusta as colunas dinamicamente de acordo com o que foi extraído
-    df = df.iloc[:, :len(colunas_nome)]
-    df.columns = colunas_nome[:df.shape[1]]
+    # Mapeamento fixo para o layout do PDF do Sicredi:
+    # Coluna 0: Data | Coluna 1: Descrição/Lançamento | Coluna 3: Crédito | Coluna 4: Débito | Coluna 7: Categoria
+    out = pd.DataFrame()
+    out["data"] = df.iloc[:, 0] if df.shape[1] > 0 else ""
+    out["descricao"] = df.iloc[:, 1] if df.shape[1] > 1 else ""
     
-    return df
-
+    # Identifica valor de crédito ou débito para consolidar na coluna 'valor'
+    credito = df.iloc[:, 3] if df.shape[1] > 3 else pd.Series("", index=df.index)
+    debito = df.iloc[:, 4] if df.shape[1] > 4 else pd.Series("", index=df.index)
+    
+    # Se houver coluna de categoria no final (geralmente índice 7), utiliza; senão, usa a descrição
+    out["categoria"] = df.iloc[:, 7] if df.shape[1] > 7 else out["descricao"]
+    
+    # Junta crédito e débito em uma única coluna de valor com sinal correto
+    valores = []
+    for c, d in zip(credito, debito):
+        v_cred = parse_valor(c)
+        v_deb = parse_valor(d)
+        if not np.isnan(v_cred) and v_cred != 0:
+            valores.append(abs(v_cred))
+        elif not np.isnan(v_deb) and v_deb != 0:
+            valores.append(-abs(v_deb))
+        else:
+            valores.append(0.0)
+            
+    out["valor"] = valores
+    return out.dropna(subset=["data", "valor"])
 @st.cache_data(show_spinner=False)
 def ler_arquivo(nome: str, conteudo: bytes) -> pd.DataFrame:
     """Lê o arquivo (Excel, CSV ou PDF) e localiza a linha de cabeçalho."""
