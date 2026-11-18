@@ -673,11 +673,14 @@ def main():
 
     periodo = base[(base["mes"] >= ini) & (base["mes"] <= fim)]
     df = periodo if visao == CONSOLIDADO else periodo[periodo["unidade"] == visao]
+    
+    # Validação de segurança para evitar IndexError caso o filtro zere os dados
+    if df.empty or not df["mes"].nunique():
+        st.warning("⚠️ Nenhum lançamento encontrado para esta combinação de unidade e período. Ajuste os filtros na barra lateral.")
+        return
+
     st.markdown(f'<div class="gbea-sub">{visao} · {rotulo_mes(ini)} a {rotulo_mes(fim)} · '
                 f'{len(df):,} lançamentos</div>'.replace(",", "."), unsafe_allow_html=True)
-    if df.empty:
-        st.warning("Sem lançamentos para esta unidade no período.")
-        return
 
     k = indicadores(df)
 
