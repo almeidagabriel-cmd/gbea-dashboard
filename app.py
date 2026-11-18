@@ -58,7 +58,7 @@ COR = {
 # ════════════════════════════════════════════════════════════════════════════
 REGRAS = [
     (["custo dos produtos", "custo produtos b&a"], "(-) CMV (Custo de Mercadoria)", "CMV", "D"),
-    (["custo embalagem"], "(-) CMV / Insumos Operacionais", "CMV", "D"),
+    (["custo embalagem", "consumiveis"], "(-) CMV / Insumos Operacionais", "CMV", "D"),
     (["impostos"], "(-) Impostos e Tributos (DAS, etc.)", "IMPOSTOS", "D"),
     (["locacao de equipamentos"], "(-) Ocupação / Estrutura (Locação de equipamentos)", "OCUPACAO", "D"),
     (["gas", "agua", "energia", "telefone", "internet"], "(-) Ocupação (Utilidades)", "OCUPACAO", "D"),
@@ -250,7 +250,7 @@ def _ler_bruto(nome: str, conteudo: bytes) -> pd.DataFrame:
 
 
 def ler_pdf(conteudo: bytes) -> pd.DataFrame:
-    """Extrai e padroniza transações de extratos em PDF do Sicredi."""
+    """Extrai transações do novo modelo de extrato em PDF do Sicredi."""
     reader = PdfReader(io.BytesIO(conteudo))
     linhas_texto = []
     
@@ -267,6 +267,9 @@ def ler_pdf(conteudo: bytes) -> pd.DataFrame:
     transacao_atual = []
 
     for linha in linhas_texto:
+        if "Data" in linha and "Lançamento" in linha:
+            continue
+            
         if padrao_data.match(linha):
             if transacao_atual:
                 transacoes.append(" ".join(transacao_atual))
@@ -286,42 +289,46 @@ def ler_pdf(conteudo: bytes) -> pd.DataFrame:
         data = match_dt.group(1)
         resto = t[len(data):].strip()
 
-        # Procura por valores monetários na linha
         valores_encontrados = re.findall(r"(-?R?\$?\s*-?\d{1,3}(?:\.\d{3})*,\d{2})", resto)
         
         valor_final = 0.0
-        is_negativo = "-" in resto or "D" in resto.split()
+        is_saida = "-" in resto or any(op in resto.upper() for op in ["DEB", "LIQUIDACAO", "ESTORNO", "SAQUE", "CESTA", "TARIF"])
         
         if valores_encontrados:
             val_str = valores_encontrados[-1]
-            valor_num = parse_valor(val_str)
-            if not np.isnan(valor_num):
-                valor_final = -abs(valor_num) if (is_negativo or "debito" in resto.lower() or "pagamento" in resto.lower() or "tarifa" in resto.lower()) else abs(valor_num)
+            val_num = parse_valor(val_str)
+            if not np.isnan(val_num):
+                if is_saida or "-" in val_str:
+                    valor_final = -abs(val_num)
+                else:
+                    valor_final = abs(val_num)
             descricao = resto.replace(val_str, "").strip()
         else:
             descricao = resto
 
-        # Mapeamento inteligente de termos do Sicredi para o DE-PARA do GBEA
-        cat_lower = descricao.lower()
-        categoria_mapeada = descricao
-        
-        if any(x in cat_lower for x in ["pix recebido", "transferencia recebida", "credito", "venda", "recebimento"]):
-            categoria_mapeada = "Receitas"
-        elif any(x in cat_lower for x in ["tarifa", "ted", "doc", "cesta"]):
-            categoria_mapeada = "Mensalidade bancaria"
-        elif any(x in cat_lower for x in ["fornecedor", "boleto", "consumo", "compra"]):
-            categoria_mapeada = "Custo dos produtos"
-        elif any(x in cat_lower for x in ["imposto", "das", "tributo", "receita federal"]):
-            categoria_mapeada = "Impostos"
-        elif any(x in cat_lower for x in ["aluguel", "locacao"]):
-            categoria_mapeada = "Aluguel"
-        elif any(x in cat_lower for x in ["energia", "luz", "copel", "energisa", "agua"]):
-            categoria_mapeada = "Energia"
+        categoria_atribuida = "Outros"
+        lower_desc = descricao.lower()
+        if "pix" in lower_desc and "recebimento" in lower_desc:
+            categoria_atribuida = "Receitas"
+        elif "pix" in lower_desc and "pagamento" in lower_desc:
+            categoria_atribuida = "Custo dos produtos"
+        elif "boleto" in lower_desc or "liquidação" in lower_desc:
+            categoria_atribuida = "Custo dos produtos"
+        elif "tarifa" in lower_desc or "cesta" in lower_desc or "iof" in lower_desc:
+            categoria_atribuida = "Mensalidade bancaria"
+        elif "energia" in lower_desc:
+            categoria_atribuida = "Energia"
+        elif "aluguel" in lower_desc or "arp" in lower_desc:
+            categoria_atribuida = "Aluguel"
+        elif "salario" in lower_desc or "folha" in lower_desc:
+            categoria_atribuida = "Salario"
+        else:
+            categoria_atribuida = descricao[:30]
 
         parsed_rows.append({
             "data": data,
             "descricao": descricao,
-            "categoria": categoria_mapeada,
+            "categoria": categoria_atribuida,
             "valor": valor_final
         })
 
@@ -587,9 +594,11 @@ def indicadores(df: pd.DataFrame) -> dict:
 CSS = """
 <style>
 .block-container {padding-top: 3.2rem; max-width: 1500px;}
-.gbea-brand {display:flex; align-items:center; gap:0.8rem; margin-bottom:0.4rem} /* Ajustado o gap e margem */
+.gbea-brand {display:flex; align-items:center; gap:0.8rem; margin-bottom:0.4rem}
 .gbea-brand .dia {width:28px; height:28px; transform:rotate(45deg); display:grid;
-  grid-template-columns:1fr 1fr; gap:2px; border-radius:4px; overflow:hidden; flex-shrink:0;} /* Evita deformação do ícone */
+  grid-template-columns:1fr 1fr; gap:2px; border-radius:4px; overflow:hidden; flex-shrink:0;}
+.gbea-brand .dia span:nth-child(1){background:#2a78d6}.gbea-brand .dia span:nth-child(2){background:#eb6834}
+.gbea-brand .dia span:nth-child(3){background:#1baf7a}.gbea-brand .dia span:nth-child(4){background:#eda100}
 .gbea-brand h1 {font-size:1.55rem; margin:0; padding:0; line-height:1.2;}
 .gbea-sub {opacity:.65; font-size:.9rem; margin-bottom:1rem}
 .kpi {border:1px solid rgba(128,128,128,.22); border-radius:10px; padding:.65rem .75rem; height:100%; display:flex; flex-direction:column; justify-content:space-between; box-sizing:border-box; overflow:hidden;}
@@ -683,14 +692,12 @@ def main():
     else:
         for arq in arquivos or []:
             try:
-                # Se for PDF, processamos separadamente e já injetamos limpo nos frames
                 if arq.name.lower().endswith(".pdf"):
                     df_pdf = ler_pdf(arq.getvalue())
                     u_auto = match_unidade(arq.name) or UNIDADES[0]
                     df_pdf["unidade"] = u_auto
                     df_pdf["origem"] = arq.name
                     
-                    # Aplica classificação do DE-PARA
                     cls = df_pdf["categoria"].map(lambda c: classificar(c, st.session_state["extra_map"]))
                     df_pdf["grupo"], df_pdf["bloco"] = cls.str[0], cls.str[1]
                     df_pdf["data"] = pd.to_datetime(df_pdf["data"], errors="coerce")
@@ -805,7 +812,6 @@ def main():
         with col1:
             st.markdown("**Receita bruta × EBITDA gerencial por mês**")
             por_mes = df.groupby(["mes", "bloco"])["valor"].sum().unstack(fill_value=0).reindex(meses_sel)
-            # CORREÇÃO APLICADA AQUI: Garante que 'RECEITA' existe nas colunas do pivô
             rec_m = por_mes["RECEITA"] if "RECEITA" in por_mes.columns else pd.Series(0.0, index=meses_sel)
             ebit_m = pd.Series([indicadores(df[df.mes == m])["ebitda"] for m in meses_sel], index=meses_sel)
             fig = go.Figure()
