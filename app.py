@@ -250,7 +250,7 @@ def _ler_bruto(nome: str, conteudo: bytes) -> pd.DataFrame:
 
 
 def ler_pdf(conteudo: bytes) -> pd.DataFrame:
-    """Extrai transações do novo modelo de extrato em PDF do Sicredi."""
+    """Extrai transações do extrato em PDF do Sicredi e limpa a categoria."""
     reader = PdfReader(io.BytesIO(conteudo))
     linhas_texto = []
     
@@ -306,24 +306,33 @@ def ler_pdf(conteudo: bytes) -> pd.DataFrame:
         else:
             descricao = resto
 
+        # Limpeza e mapeamento inteligente baseado nas palavras-chave do Sicredi
+        desc_upper = descricao.upper()
         categoria_atribuida = "Outros"
-        lower_desc = descricao.lower()
-        if "pix" in lower_desc and "recebimento" in lower_desc:
+
+        if "PIX" in desc_upper and ("RECEBIMENTO" in desc_upper or "REC" in desc_upper):
             categoria_atribuida = "Receitas"
-        elif "pix" in lower_desc and "pagamento" in lower_desc:
+        elif "PIX" in desc_upper and "PAGAMENTO" in desc_upper:
             categoria_atribuida = "Custo dos produtos"
-        elif "boleto" in lower_desc or "liquidação" in lower_desc:
+        elif "BOLETO" in desc_upper or "LIQUIDACAO" in desc_upper:
             categoria_atribuida = "Custo dos produtos"
-        elif "tarifa" in lower_desc or "cesta" in lower_desc or "iof" in lower_desc:
+        elif any(k in desc_upper for k in ["TARIFA", "CESTA", "IOF", "DEB.CTA.FATURA"]):
             categoria_atribuida = "Mensalidade bancaria"
-        elif "energia" in lower_desc:
+        elif any(k in desc_upper for k in ["ARRECADACAO", "SIMPLES", "DARF", "INSS", "FGTS"]):
+            categoria_atribuida = "Impostos"
+        elif "ENERGIA" in desc_upper:
             categoria_atribuida = "Energia"
-        elif "aluguel" in lower_desc or "arp" in lower_desc:
+        elif any(k in desc_upper for k in ["ALUGUEL", "ARP"]):
             categoria_atribuida = "Aluguel"
-        elif "salario" in lower_desc or "folha" in lower_desc:
+        elif any(k in desc_upper for k in ["SALARIO", "FOLHA"]):
             categoria_atribuida = "Salario"
+        elif "DEP DINHEIRO" in desc_upper or "DEPOSITO" in desc_upper:
+            categoria_atribuida = "Transf entrada"
+        elif "SAQUE" in desc_upper:
+            categoria_atribuida = "Transf saida"
         else:
-            categoria_atribuida = descricao[:30]
+            # Pega apenas a primeira parte do texto para evitar poluição na categoria
+            categoria_atribuida = descricao.split()[0] if descricao else "Outros"
 
         parsed_rows.append({
             "data": data,
