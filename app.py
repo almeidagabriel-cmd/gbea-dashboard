@@ -651,10 +651,15 @@ def main():
     base = pd.concat(frames, ignore_index=True)
     base["mes"] = base["data"].dt.strftime("%Y-%m")
 
-    # ── Sidebar: filtros ─────────────────────────────────────────────────
+   # ── Sidebar: filtros ─────────────────────────────────────────────────
     with st.sidebar:
         st.divider()
-        meses = sorted(base["mes"].unique())
+        meses = sorted(base["mes"].unique()) if not base.empty else []
+        
+        if not meses:
+            st.error("Nenhum mês/dado encontrado. Verifique os arquivos enviados.")
+            return
+
         if len(meses) > 1:
             ini, fim = st.select_slider("Período", options=meses, value=(meses[0], meses[-1]),
                                         format_func=rotulo_mes)
