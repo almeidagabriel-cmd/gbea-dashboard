@@ -514,10 +514,10 @@ CSS = """
 .gbea-brand .dia span:nth-child(3){background:#1baf7a}.gbea-brand .dia span:nth-child(4){background:#eda100}
 .gbea-brand h1 {font-size:1.55rem; margin:0; padding:0}
 .gbea-sub {opacity:.65; font-size:.9rem; margin-bottom:1rem}
-.kpi {border:1px solid rgba(128,128,128,.22); border-radius:10px; padding:.75rem .9rem; height:100%}
-.kpi .l {font-size:.75rem; opacity:.7; text-transform:uppercase; letter-spacing:.03em}
-.kpi .v {font-size:1.3rem; white-space:nowrap; font-weight:650; margin-top:.15rem; font-variant-numeric:tabular-nums}
-.kpi .s {font-size:.78rem; opacity:.75; margin-top:.1rem}
+.kpi {border:1px solid rgba(128,128,128,.22); border-radius:10px; padding:.65rem .75rem; height:100%; display:flex; flex-direction:column; justify-content:space-between; box-sizing:border-box; overflow:hidden;}
+.kpi .l {font-size:.68rem; opacity:.75; text-transform:uppercase; letter-spacing:.02em; line-height:1.15; min-height:2.4em;}
+.kpi .v {font-size:1.1rem; white-space:nowrap; font-weight:700; margin-top:.2rem; font-variant-numeric:tabular-nums; letter-spacing:-0.03em;}
+.kpi .s {font-size:.72rem; opacity:.75; margin-top:.15rem; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;}
 .kpi.neg .v {color:#d03b3b}
 table.dre {border-collapse:collapse; width:100%; font-size:.84rem; font-variant-numeric:tabular-nums}
 table.dre th {text-align:right; padding:.45rem .6rem; border-bottom:2px solid rgba(128,128,128,.35);
