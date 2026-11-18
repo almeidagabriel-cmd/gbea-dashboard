@@ -262,7 +262,6 @@ def ler_pdf(conteudo: bytes) -> pd.DataFrame:
                 if linha:
                     linhas_texto.append(linha)
 
-    # Identifica linhas que começam com data (YYYY-MM-DD)
     padrao_data = re.compile(r"^(\d{4}-\d{2}-\d{2})")
     transacoes = []
     transacao_atual = []
@@ -281,31 +280,26 @@ def ler_pdf(conteudo: bytes) -> pd.DataFrame:
 
     parsed_rows = []
     for t in transacoes:
-        # Extrai a data do início
         match_dt = padrao_data.search(t)
         if not match_dt:
             continue
         data = match_dt.group(1)
         resto = t[len(data):].strip()
 
-        # Procura por valores monetários na linha (ex: R$ 1.234,56 ou -R$ 123,45)
         valores_encontrados = re.findall(r"(-?R?\$?\s*-?\d{1,3}(?:\.\d{3})*,\d{2})", resto)
         
         valor_final = 0.0
         if valores_encontrados:
-            # Pega o último ou penúltimo valor numérico consistente como o valor da transação
             val_str = valores_encontrados[-1]
             valor_final = parse_valor(val_str)
-            # Remove o valor extraído da descrição
             descricao = resto.replace(val_str, "").strip()
         else:
             descricao = resto
 
-        # Categoria padrão baseada no texto ou genérica para passar pelo de-para
         parsed_rows.append({
             "data": data,
             "descricao": descricao,
-            "categoria": descricao, # Usa a descrição como categoria inicial para busca no DE-PARA
+            "categoria": descricao,
             "valor": valor_final
         })
 
@@ -791,7 +785,8 @@ def main():
         with col1:
             st.markdown("**Receita bruta × EBITDA gerencial por mês**")
             por_mes = df.groupby(["mes", "bloco"])["valor"].sum().unstack(fill_value=0).reindex(meses_sel)
-            rec_m = por_mes.get("RECEITA", 0)
+            # CORREÇÃO APLICADA AQUI: Garante que 'RECEITA' existe nas colunas do pivô
+            rec_m = por_mes["RECEITA"] if "RECEITA" in por_mes.columns else pd.Series(0.0, index=meses_sel)
             ebit_m = pd.Series([indicadores(df[df.mes == m])["ebitda"] for m in meses_sel], index=meses_sel)
             fig = go.Figure()
             fig.add_bar(x=rot_meses, y=rec_m, name="Receita bruta", marker_color=COR["s1"],
