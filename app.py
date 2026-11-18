@@ -250,7 +250,7 @@ def _ler_bruto(nome: str, conteudo: bytes) -> pd.DataFrame:
 
 
 def ler_pdf(conteudo: bytes) -> pd.DataFrame:
-    """Extrai transações do extrato em PDF do Sicredi e limpa a categoria."""
+    """Extrai transações do extrato em PDF do Sicredi mantendo o sinal correto (crédito x débito)."""
     reader = PdfReader(io.BytesIO(conteudo))
     linhas_texto = []
     
@@ -291,14 +291,20 @@ def ler_pdf(conteudo: bytes) -> pd.DataFrame:
 
         valores_encontrados = re.findall(r"(-?R?\$?\s*-?\d{1,3}(?:\.\d{3})*,\d{2})", resto)
         
-        valor_final = 0.0
-        is_saida = "-" in resto or any(op in resto.upper() for op in ["DEB", "LIQUIDACAO", "ESTORNO", "SAQUE", "CESTA", "TARIF"])
+        desc_upper = resto.upper()
         
+        # Identifica se é entrada (crédito) de forma segura
+        is_entrada_forcada = any(k in desc_upper for k in ["ANTEC", "RECEBIMENTO", "CREDITO", "SUB CR", "PIX 3", "PIX 4", "PIX 5", "PIX 6", "PIX 7", "PIX 8", "PIX 9"])
+        is_saida = "-" in resto or any(op in desc_upper for op in ["DEB", "LIQUIDACAO", "ESTORNO", "SAQUE", "CESTA", "TARIF", "PAGAMENTO"])
+
+        valor_final = 0.0
         if valores_encontrados:
             val_str = valores_encontrados[-1]
             val_num = parse_valor(val_str)
             if not np.isnan(val_num):
-                if is_saida or "-" in val_str:
+                if is_entrada_forcada and not "-" in val_str:
+                    valor_final = abs(val_num)
+                elif is_saida or "-" in val_str:
                     valor_final = -abs(val_num)
                 else:
                     valor_final = abs(val_num)
@@ -306,7 +312,7 @@ def ler_pdf(conteudo: bytes) -> pd.DataFrame:
         else:
             descricao = resto
 
-        desc_upper = descricao.upper()
+        # Limpeza e mapeamento inteligente baseado nas palavras-chave do Sicredi
         categoria_atribuida = "Outros"
 
         if "PIX" in desc_upper and ("RECEBIMENTO" in desc_upper or "REC" in desc_upper):
@@ -412,8 +418,11 @@ def padronizar(df: pd.DataFrame, cols: dict, unidade_padrao: str, extra_map: dic
     out["grupo"] = cls.str[0]
     out["bloco"] = cls.str[1]
     nat = cls.str[2]
-    if not assinado:
+    
+    # Se o extrato já veio com sinal explícito (como PDFs do Sicredi tratados), não forçar inversão em créditos
+    if not assinado and not origem.lower().endswith(".pdf"):
         out["valor"] = np.where(nat == "D", -out["valor"].abs(), out["valor"].abs())
+        
     out["origem"] = origem
     out = out.dropna(subset=["data", "valor"])
     return out[out["valor"] != 0]
