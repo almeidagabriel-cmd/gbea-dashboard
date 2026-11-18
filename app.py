@@ -5,7 +5,7 @@ Executar:
     pip install -r requirements.txt
     streamlit run app.py
 
-Entrada: extratos em .csv / .xlsx / .xls (um por unidade ou um consolidado com
+Entrada: extratos em .csv / .xlsx / .xls / .pdf (um por unidade ou um consolidado com
 coluna de empresa). Colunas reconhecidas automaticamente (ajustáveis na tela):
     Data | Empresa/Unidade (opcional) | Categoria/Plano de contas | Descrição (opcional)
     Valor (com sinal)  -ou-  Valor + Tipo (D/C)  -ou-  Entrada + Saída
@@ -18,13 +18,13 @@ import unicodedata
 
 import numpy as np
 import pandas as pd
+from pypdf import PdfReader
 import plotly.graph_objects as go
 import streamlit as st
 
 # ════════════════════════════════════════════════════════════════════════════
 # 1. CADASTROS
 # ════════════════════════════════════════════════════════════════════════════
-# Distribuidora = atacado da Serra Carioca · CD Produção = produção da padaria
 UNIDADES = [
     "Feitoria Cozinha",
     "Casa Cônego",
@@ -37,7 +37,6 @@ UNIDADES = [
 ]
 CONSOLIDADO = "Grupo GBEA"
 
-# Palavras-chave para reconhecer a unidade a partir de nome de arquivo / coluna empresa
 UNIDADE_CHAVES = {
     "Feitoria Cozinha": ["feitoria"],
     "Casa Cônego": ["conego", "casa conego"],
@@ -49,7 +48,6 @@ UNIDADE_CHAVES = {
     "Feito Brasa": ["brasa"],
 }
 
-# Paleta (validada para daltonismo – ordem fixa, não reciclar)
 COR = {
     "s1": "#2a78d6", "s2": "#eb6834", "s3": "#1baf7a", "s4": "#eda100",
     "good": "#0ca30c", "critical": "#d03b3b", "neutral": "#8a8983",
@@ -57,8 +55,6 @@ COR = {
 
 # ════════════════════════════════════════════════════════════════════════════
 # 2. DE-PARA OFICIAL GBEA
-#    (termos do extrato) -> (grupo gerencial, bloco da DRE, natureza)
-#    natureza: "D" saída | "C" entrada | "±" depende do sinal do extrato
 # ════════════════════════════════════════════════════════════════════════════
 REGRAS = [
     (["custo dos produtos", "custo produtos b&a"], "(-) CMV (Custo de Mercadoria)", "CMV", "D"),
@@ -99,7 +95,6 @@ REGRAS = [
 ]
 SEM_CLASSIF = ("(?) Sem classificação", "SEM_CLASSIF", "±")
 
-# Blocos usados na DRE / fluxo
 BLOCOS_DESP_OP = [
     ("PESSOAL", "(-) Despesas com Pessoal"),
     ("OCUPACAO", "(-) Despesas de Ocupação"),
@@ -199,7 +194,7 @@ def brl_curto(v: float) -> str:
     elif a >= 1e4:
         t = f"{a / 1e3:.1f}".replace(".", ",") + " mil"
     else:
-        t = f"{a:,.0f}".replace(",", ".")
+        t = f"{a:,.0f}".replace(".", ".")
     return f"-R$ {t}" if v < 0 else f"R$ {t}"
 
 
@@ -225,7 +220,7 @@ def match_unidade(texto) -> str | None:
 
 
 # ════════════════════════════════════════════════════════════════════════════
-# 4. LEITURA DOS EXTRATOS
+# 4. LEITURA DOS EXTRATOS (EXCEL, CSV E PDF)
 # ════════════════════════════════════════════════════════════════════════════
 CANDIDATOS = {
     "data": ["data", "dt", "venc", "data movimento", "data pagamento", "data lancamento", "competencia",
@@ -254,10 +249,34 @@ def _ler_bruto(nome: str, conteudo: bytes) -> pd.DataFrame:
     raise ValueError(f"Não consegui ler {nome}")
 
 
+def ler_pdf(conteudo: bytes) -> pd.DataFrame:
+    """Extrai texto estruturado de arquivos PDF e converte em DataFrame."""
+    reader = PdfReader(io.BytesIO(conteudo))
+    texto_linhas = []
+    for pagina in reader.pages:
+        txt = pagina.extract_text()
+        if txt:
+            for linha in txt.split("\n"):
+                partes = re.split(r'\s{2,}|\t', linha.strip())
+                if len(partes) > 1:
+                    texto_linhas.append(partes)
+    
+    if not texto_linhas:
+        raise ValueError("Não foi possível extrair dados estruturados deste PDF.")
+    
+    df = pd.DataFrame(texto_linhas)
+    df.columns = [f"col_{i}" for i in range(df.shape[1])]
+    return df
+
+
 @st.cache_data(show_spinner=False)
 def ler_arquivo(nome: str, conteudo: bytes) -> pd.DataFrame:
-    """Lê o arquivo e localiza a linha de cabeçalho (ignora títulos/logos acima da tabela)."""
-    bruto = _ler_bruto(nome, conteudo)
+    """Lê o arquivo (Excel, CSV ou PDF) e localiza a linha de cabeçalho."""
+    if nome.lower().endswith(".pdf"):
+        bruto = ler_pdf(conteudo)
+    else:
+        bruto = _ler_bruto(nome, conteudo)
+        
     todos = {c for v in CANDIDATOS.values() for c in v}
     linha_cab = 0
     for i in range(min(20, len(bruto))):
@@ -283,7 +302,7 @@ def detectar_colunas(cols: list[str]) -> dict:
         if achado[campo] is None:
             achado[campo] = next((c for c in cols if any(normalizadas[c].startswith(x) for x in cands
                                                            if len(x) > 3)), None)
-    if achado["valor"]:  # com coluna valor, entrada/saída não são usadas
+    if achado["valor"]:
         achado["entrada"] = achado["saida"] = None
     return achado
 
@@ -318,7 +337,7 @@ def padronizar(df: pd.DataFrame, cols: dict, unidade_padrao: str, extra_map: dic
     out["grupo"] = cls.str[0]
     out["bloco"] = cls.str[1]
     nat = cls.str[2]
-    if not assinado:  # extrato sem sinal: aplica natureza do DE-PARA
+    if not assinado:
         out["valor"] = np.where(nat == "D", -out["valor"].abs(), out["valor"].abs())
     out["origem"] = origem
     out = out.dropna(subset=["data", "valor"])
@@ -326,13 +345,12 @@ def padronizar(df: pd.DataFrame, cols: dict, unidade_padrao: str, extra_map: dic
 
 
 # ════════════════════════════════════════════════════════════════════════════
-# 5. DADOS DE EXEMPLO (para validar o modelo antes de carregar os extratos reais)
+# 5. DADOS DE EXEMPLO
 # ════════════════════════════════════════════════════════════════════════════
 @st.cache_data(show_spinner=False)
 def dados_exemplo(extra: tuple = (), seed: int = 7) -> pd.DataFrame:
     rng = np.random.default_rng(seed)
     meses = pd.period_range("2026-06", "2026-11", freq="M")
-    # receita mensal, %CMV, %folha, aluguel, tem artistas, cobra 10%
     perfil = {
         "Feitoria Cozinha": (420_000, .31, .24, 28_000, False, True),
         "Casa Cônego": (360_000, .29, .26, 32_000, True, True),
@@ -404,7 +422,6 @@ def dados_exemplo(extra: tuple = (), seed: int = 7) -> pd.DataFrame:
                 add(u, ini + pd.Timedelta(days=21), "Despesa não identificada", -rng.uniform(300, 2_500))
             if u in ("Feito Brasa", "Savá Padaria"):
                 add(u, ini + pd.Timedelta(days=13), "Taxa iFood", -r * .018, "Categoria fora do DE-PARA")
-        # Trânsitos entre empresas (devem zerar no consolidado)
         for origem, destino, val in [("Distribuidora", "Serra Carioca", 22_000),
                                      ("Savá Padaria", "CD Produção", 35_000),
                                      ("Feitoria Cozinha", "Savá Padaria", 15_000),
@@ -414,7 +431,6 @@ def dados_exemplo(extra: tuple = (), seed: int = 7) -> pd.DataFrame:
             add(origem, d, "Transf saida", -v, f"Transf. para {destino}")
             add(destino, d, "Transf entrada", v, f"Transf. de {origem}")
         add("Distribuidora", ini + pd.Timedelta(days=12), "Receitas financeiras", 1_150, "Rendimento aplicação")
-    # Eventos pontuais
     add("Rua Burguer", pd.Timestamp("2026-06-05"), "Emprestimo", 80_000, "Capital de giro – entrada")
     for m in meses[1:]:
         add("Rua Burguer", m.to_timestamp() + pd.Timedelta(days=9), "Emprestimo D", -4_350, "Parcela empréstimo")
@@ -437,12 +453,11 @@ def soma_bloco(piv: pd.DataFrame, bloco: str) -> pd.Series:
 
 
 def montar_dre(df: pd.DataFrame, detalhe: bool) -> pd.DataFrame:
-    """Linhas = contas gerenciais; colunas = meses + Total + AV%."""
     meses = sorted(df["mes"].unique())
     piv = df.pivot_table(index="bloco", columns="mes", values="valor", aggfunc="sum").reindex(columns=meses).fillna(0)
     pivg = df.pivot_table(index=["bloco", "grupo"], columns="mes", values="valor", aggfunc="sum") \
         .reindex(columns=meses).fillna(0)
-    linhas: list[tuple[str, str, pd.Series]] = []  # (rótulo, estilo, valores)
+    linhas: list[tuple[str, str, pd.Series]] = []
 
     def bloco(b, rot=None, estilo="conta"):
         s = soma_bloco(piv, b)
@@ -600,7 +615,7 @@ def main():
                          help="Use os dados de exemplo para validar o modelo antes de carregar os extratos reais.")
         arquivos = []
         if fonte == "Extratos enviados":
-            arquivos = st.file_uploader("Extratos (.csv, .xlsx)", type=["csv", "xlsx", "xls", "xlsm"],
+            arquivos = st.file_uploader("Extratos (.csv, .xlsx, .pdf)", type=["csv", "xlsx", "xls", "xlsm", "pdf"],
                                         accept_multiple_files=True)
 
     frames, avisos = [], []
@@ -610,7 +625,7 @@ def main():
         for arq in arquivos or []:
             try:
                 bruto = ler_arquivo(arq.name, arq.getvalue())
-            except Exception as e:  # noqa: BLE001
+            except Exception as e:
                 avisos.append(f"❌ {arq.name}: {e}")
                 continue
             auto = detectar_colunas(list(bruto.columns))
@@ -651,7 +666,7 @@ def main():
     base = pd.concat(frames, ignore_index=True)
     base["mes"] = base["data"].dt.strftime("%Y-%m")
 
-   # ── Sidebar: filtros ─────────────────────────────────────────────────
+    # ── Sidebar: filtros ─────────────────────────────────────────────────
     with st.sidebar:
         st.divider()
         meses = sorted(base["mes"].unique()) if not base.empty else []
@@ -679,7 +694,6 @@ def main():
     periodo = base[(base["mes"] >= ini) & (base["mes"] <= fim)]
     df = periodo if visao == CONSOLIDADO else periodo[periodo["unidade"] == visao]
     
-    # Validação de segurança para evitar IndexError caso o filtro zere os dados
     if df.empty or not df["mes"].nunique():
         st.warning("⚠️ Nenhum lançamento encontrado para esta combinação de unidade e período. Ajuste os filtros na barra lateral.")
         return
