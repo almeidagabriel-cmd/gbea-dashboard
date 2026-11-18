@@ -250,73 +250,78 @@ def _ler_bruto(nome: str, conteudo: bytes) -> pd.DataFrame:
 
 
 def ler_pdf(conteudo: bytes) -> pd.DataFrame:
-    """Extrai e mapeia linhas de extratos em PDF do Sicredi para o formato padrão."""
+    """Extrai transações de extratos em PDF (como Sicredi) transformando em DataFrame tabular limpo."""
     reader = PdfReader(io.BytesIO(conteudo))
-    linhas_extraidas = []
-    padrao_data = re.compile(r"^\d{4}-\d{2}-\d{2}")
+    linhas_texto = []
     
     for pagina in reader.pages:
         txt = pagina.extract_text()
-        if not txt:
-            continue
-            
-        buffer_linha = ""
-        for linha in txt.split("\n"):
-            linha = linha.strip()
-            if not linha:
-                continue
-            
-            if padrao_data.match(linha):
-                if buffer_linha:
-                    linhas_extraidas.append(buffer_linha)
-                buffer_linha = linha
-            else:
-                buffer_linha += " | " + linha
-                
-        if buffer_linha:
-            linhas_extraidas.append(buffer_linha)
-            
-    if not linhas_extraidas:
-        raise ValueError("Não foi possível extrair dados estruturados deste PDF.")
-        
-    dados_tabela = [item.split(" | ") for item in linhas_extraidas]
-    df = pd.DataFrame(dados_tabela)
-    
-    # Mapeamento fixo para o layout do PDF do Sicredi:
-    # Coluna 0: Data | Coluna 1: Descrição/Lançamento | Coluna 3: Crédito | Coluna 4: Débito | Coluna 7: Categoria
-    out = pd.DataFrame()
-    out["data"] = df.iloc[:, 0] if df.shape[1] > 0 else ""
-    out["descricao"] = df.iloc[:, 1] if df.shape[1] > 1 else ""
-    
-    # Identifica valor de crédito ou débito para consolidar na coluna 'valor'
-    credito = df.iloc[:, 3] if df.shape[1] > 3 else pd.Series("", index=df.index)
-    debito = df.iloc[:, 4] if df.shape[1] > 4 else pd.Series("", index=df.index)
-    
-    # Se houver coluna de categoria no final (geralmente índice 7), utiliza; senão, usa a descrição
-    out["categoria"] = df.iloc[:, 7] if df.shape[1] > 7 else out["descricao"]
-    
-    # Junta crédito e débito em uma única coluna de valor com sinal correto
-    valores = []
-    for c, d in zip(credito, debito):
-        v_cred = parse_valor(c)
-        v_deb = parse_valor(d)
-        if not np.isnan(v_cred) and v_cred != 0:
-            valores.append(abs(v_cred))
-        elif not np.isnan(v_deb) and v_deb != 0:
-            valores.append(-abs(v_deb))
+        if txt:
+            for linha in txt.split("\n"):
+                linha = linha.strip()
+                if linha:
+                    linhas_texto.append(linha)
+
+    # Identifica linhas que começam com data (YYYY-MM-DD)
+    padrao_data = re.compile(r"^(\d{4}-\d{2}-\d{2})")
+    transacoes = []
+    transacao_atual = []
+
+    for linha in linhas_texto:
+        if padrao_data.match(linha):
+            if transacao_atual:
+                transacoes.append(" ".join(transacao_atual))
+            transacao_atual = [linha]
         else:
-            valores.append(0.0)
-            
-    out["valor"] = valores
-    return out.dropna(subset=["data", "valor"])
+            if transacao_atual:
+                transacao_atual.append(linha)
+                
+    if transacao_atual:
+        transacoes.append(" ".join(transacao_atual))
+
+    parsed_rows = []
+    for t in transacoes:
+        # Extrai a data do início
+        match_dt = padrao_data.search(t)
+        if not match_dt:
+            continue
+        data = match_dt.group(1)
+        resto = t[len(data):].strip()
+
+        # Procura por valores monetários na linha (ex: R$ 1.234,56 ou -R$ 123,45)
+        valores_encontrados = re.findall(r"(-?R?\$?\s*-?\d{1,3}(?:\.\d{3})*,\d{2})", resto)
+        
+        valor_final = 0.0
+        if valores_encontrados:
+            # Pega o último ou penúltimo valor numérico consistente como o valor da transação
+            val_str = valores_encontrados[-1]
+            valor_final = parse_valor(val_str)
+            # Remove o valor extraído da descrição
+            descricao = resto.replace(val_str, "").strip()
+        else:
+            descricao = resto
+
+        # Categoria padrão baseada no texto ou genérica para passar pelo de-para
+        parsed_rows.append({
+            "data": data,
+            "descricao": descricao,
+            "categoria": descricao, # Usa a descrição como categoria inicial para busca no DE-PARA
+            "valor": valor_final
+        })
+
+    df = pd.DataFrame(parsed_rows)
+    if df.empty:
+        raise ValueError("Nenhuma transação válida encontrada no PDF.")
+    return df
+
+
 @st.cache_data(show_spinner=False)
 def ler_arquivo(nome: str, conteudo: bytes) -> pd.DataFrame:
-    """Lê o arquivo (Excel, CSV ou PDF) e localiza a linha de cabeçalho."""
+    """Lê o arquivo. Se for PDF, processa direto; se for Excel/CSV, localiza o cabeçalho."""
     if nome.lower().endswith(".pdf"):
-        bruto = ler_pdf(conteudo)
-    else:
-        bruto = _ler_bruto(nome, conteudo)
+        return ler_pdf(conteudo)
         
+    bruto = _ler_bruto(nome, conteudo)
     todos = {c for v in CANDIDATOS.values() for c in v}
     linha_cab = 0
     for i in range(min(20, len(bruto))):
@@ -664,10 +669,27 @@ def main():
     else:
         for arq in arquivos or []:
             try:
+                # Se for PDF, processamos separadamente e já injetamos limpo nos frames
+                if arq.name.lower().endswith(".pdf"):
+                    df_pdf = ler_pdf(arq.getvalue())
+                    u_auto = match_unidade(arq.name) or UNIDADES[0]
+                    df_pdf["unidade"] = u_auto
+                    df_pdf["origem"] = arq.name
+                    
+                    # Aplica classificação do DE-PARA
+                    cls = df_pdf["categoria"].map(lambda c: classificar(c, st.session_state["extra_map"]))
+                    df_pdf["grupo"], df_pdf["bloco"] = cls.str[0], cls.str[1]
+                    df_pdf["data"] = pd.to_datetime(df_pdf["data"], errors="coerce")
+                    df_pdf["mes"] = df_pdf["data"].dt.strftime("%Y-%m")
+                    df_pdf = df_pdf.dropna(subset=["data", "valor"])
+                    frames.append(df_pdf[df_pdf["valor"] != 0])
+                    continue
+
                 bruto = ler_arquivo(arq.name, arq.getvalue())
             except Exception as e:
                 avisos.append(f"❌ {arq.name}: {e}")
                 continue
+            
             auto = detectar_colunas(list(bruto.columns))
             with st.sidebar.expander(f"📄 {arq.name}", expanded=not (auto["data"] and auto["categoria"]
                                                                      and (auto["valor"] or auto["entrada"]))):
