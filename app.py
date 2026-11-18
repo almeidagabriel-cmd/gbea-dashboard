@@ -250,7 +250,7 @@ def _ler_bruto(nome: str, conteudo: bytes) -> pd.DataFrame:
 
 
 def ler_pdf(conteudo: bytes) -> pd.DataFrame:
-    """Extrai transações de extratos em PDF (como Sicredi) transformando em DataFrame tabular limpo."""
+    """Extrai e padroniza transações de extratos em PDF do Sicredi."""
     reader = PdfReader(io.BytesIO(conteudo))
     linhas_texto = []
     
@@ -286,20 +286,42 @@ def ler_pdf(conteudo: bytes) -> pd.DataFrame:
         data = match_dt.group(1)
         resto = t[len(data):].strip()
 
+        # Procura por valores monetários na linha
         valores_encontrados = re.findall(r"(-?R?\$?\s*-?\d{1,3}(?:\.\d{3})*,\d{2})", resto)
         
         valor_final = 0.0
+        is_negativo = "-" in resto or "D" in resto.split()
+        
         if valores_encontrados:
             val_str = valores_encontrados[-1]
-            valor_final = parse_valor(val_str)
+            valor_num = parse_valor(val_str)
+            if not np.isnan(valor_num):
+                valor_final = -abs(valor_num) if (is_negativo or "debito" in resto.lower() or "pagamento" in resto.lower() or "tarifa" in resto.lower()) else abs(valor_num)
             descricao = resto.replace(val_str, "").strip()
         else:
             descricao = resto
 
+        # Mapeamento inteligente de termos do Sicredi para o DE-PARA do GBEA
+        cat_lower = descricao.lower()
+        categoria_mapeada = descricao
+        
+        if any(x in cat_lower for x in ["pix recebido", "transferencia recebida", "credito", "venda", "recebimento"]):
+            categoria_mapeada = "Receitas"
+        elif any(x in cat_lower for x in ["tarifa", "ted", "doc", "cesta"]):
+            categoria_mapeada = "Mensalidade bancaria"
+        elif any(x in cat_lower for x in ["fornecedor", "boleto", "consumo", "compra"]):
+            categoria_mapeada = "Custo dos produtos"
+        elif any(x in cat_lower for x in ["imposto", "das", "tributo", "receita federal"]):
+            categoria_mapeada = "Impostos"
+        elif any(x in cat_lower for x in ["aluguel", "locacao"]):
+            categoria_mapeada = "Aluguel"
+        elif any(x in cat_lower for x in ["energia", "luz", "copel", "energisa", "agua"]):
+            categoria_mapeada = "Energia"
+
         parsed_rows.append({
             "data": data,
             "descricao": descricao,
-            "categoria": descricao,
+            "categoria": categoria_mapeada,
             "valor": valor_final
         })
 
